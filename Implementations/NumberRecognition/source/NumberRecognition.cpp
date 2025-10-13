@@ -423,10 +423,6 @@ float** NumberRecognition::getImages(Set test_train, size_t start_idx, size_t en
 
         my_images[idx] = (float*)calloc(IMAGE_DIM, sizeof(float));
 
-        uint32_t* center = computeCenter(image);
-        float averageMasspp = float(center[2]) / (256.f * IMAGE_DIM);
-        free(center);
-
         for (unsigned i = 0; i < IMAGE_DIM; i++)
             my_images[idx][i] = float(image[i]) / 256.f;
     }

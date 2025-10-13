@@ -27,9 +27,11 @@ private:
 	float** error_signal = nullptr;			// Stores the error signal to each layer
 	float** layers = nullptr;				// Stores the nodes of the neural network
 	float*** weights = nullptr;				// Stores the weights of the neural network
+	float*** velocity = nullptr;			// Stores historical gradient of the weights
 
 	float learning_rate = 0.005f;			// Learning rate used for GD and perceptron
 	float weight_decay_lambda = 1e-8f;		// Stores the lambda for weight decay training
+	float gradient_momentum = 0.85f;		// Momentum variable used for SGD with momentum
 
 	float** training_inputs = nullptr;		// Stores inputs for training.
 	unsigned* training_answers = nullptr;	// Stores correct answers for training.
@@ -37,17 +39,19 @@ private:
 
 	// Inline helpers
 
+	// Sets the velocity vector to zero for new training round.
+	inline void resetVelocity();
 	// Helper inline function to calculate the dot product between a set of weights and a layer.
-	inline float _dot_prod(const unsigned input_layer, const unsigned output_node) const;
+	inline float _dot_prod(const unsigned input_layer, const unsigned output_node);
 	// Helper inline function to update a set of weights for one training iteration.
 	// Updates the weights from one layer to a specific node by w[i_layer][o_node] += multiplier * layers[i_layer]
-	inline void addToWeights(const float multiplier, const unsigned input_layer, const unsigned output_node);
+	inline void doWeightStep(const float error_signal, const unsigned input_layer, const unsigned output_node);
 	// Helper inline function that performs a weight decay step on a set of weights.
 	inline void doWeightDecay(const unsigned input_layer, const unsigned output_node);
 	// Normalizes the output values using the softmax activation function, returns the pointer to the output.
-	inline float* _softmax() const;
+	inline float* _softmax();
 	// Applies ReLU to a given layer, simple function for convenience, returns the pointer to the layer.
-	inline float* _ReLU(unsigned layer) const;
+	inline float* _ReLU(unsigned layer);
 	// Applies back propagation gradient descent given a single training example.
 	inline void doBackPropagation(unsigned answer);
 
@@ -79,7 +83,7 @@ public:
 
 	// Loads weights previously stored with the same name. If the neural network
 	// structure does not match to the stored one with the same name it will fail.
-	bool loadWeights(const char* stored_name) const;
+	bool loadWeights(const char* stored_name);
 
 	// Copies the new training inputs and outputs and adds it to its array. They must be ordered
 	// as follows: inputs[num_data][num_input_nodes], outputs[num_data][num_output_nodes].
@@ -120,4 +124,6 @@ public:
 	void	 setWeightDecay(float lambda);	// Sets the lambda used for weight decay
 	float	 getLearningRate() const;		// Returns the learning rate used for training
 	void	 setLearningRate(float rate);	// Sets the learning rate used for training
+	float	 getMomentum() const;			// Returns the momentum variable used for weight step
+	void	 setMomentum(float momentum);	// Sets the momentum variable used for weight step
 };

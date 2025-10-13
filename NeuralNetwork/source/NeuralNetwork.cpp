@@ -58,9 +58,18 @@ Inline private helpers
 -------------------------------------------------------------------------------------------------------
 */
 
+// Sets the velocity vector to zero for new training round.
+
+inline void NeuralNetwork::resetVelocity()
+{
+	for (unsigned layer = 0u; layer < num_layers - 1; layer++)
+		for (unsigned output = 0u; output < layer_sizes[layer + 1]; output++)
+			memset(velocity[layer][output], 0, (layer_sizes[layer] + 1) + sizeof(float));
+}
+
 // Helper inline function to calculate the dot product between a set of weights and a layer.
 
-inline float NeuralNetwork::_dot_prod(const unsigned input_layer, const unsigned output_node) const
+inline float NeuralNetwork::_dot_prod(const unsigned input_layer, const unsigned output_node)
 {
 	float* o_weights = weights[input_layer][output_node];
 	float dot_prod = 0;
@@ -74,14 +83,19 @@ inline float NeuralNetwork::_dot_prod(const unsigned input_layer, const unsigned
 // Helper inline function to update a set of weights for one training iteration.
 // Updates the weights from one layer to a specific node by w[i_layer][o_node] += multiplier * layers[i_layer]
 
-inline void NeuralNetwork::addToWeights(const float multiplier, const unsigned input_layer, const unsigned output_node)
+inline void NeuralNetwork::doWeightStep(const float error_signal, const unsigned input_layer, const unsigned output_node)
 {
-	float* o_weights = weights[input_layer][output_node];
+	float* node_weights = weights[input_layer][output_node];
+	float* node_velocity = velocity[input_layer][output_node];
+	const float const* layer = layers[input_layer];
+	const float factor = -learning_rate * error_signal;
+	const unsigned layer_size = layer_sizes[input_layer];
 
-	for (unsigned i = 0; i < layer_sizes[input_layer]; i++)
-		o_weights[i] += multiplier * layers[input_layer][i];
+	unsigned i = 0;
+	for (; i < layer_size; i++)
+		node_weights[i] += (node_velocity[i] = node_velocity[i] * gradient_momentum + factor * layer[i]);
 
-	o_weights[layer_sizes[input_layer]] += multiplier;
+	node_weights[i] += (node_velocity[i] = node_velocity[i] * gradient_momentum + factor);
 }
 
 // Helper inline function that performs a weight decay step on a set of weights.
@@ -97,7 +111,7 @@ inline void NeuralNetwork::doWeightDecay(const unsigned input_layer, const unsig
 
 // Normalizes the output values using the softmax activation function, returns the pointer to the output.
 
-inline float* NeuralNetwork::_softmax() const
+inline float* NeuralNetwork::_softmax()
 {
 	float max = output_layer[0];
 	for (unsigned node = 1; node < layer_sizes[num_layers - 1]; node++)
@@ -119,7 +133,7 @@ inline float* NeuralNetwork::_softmax() const
 
 // Applies ReLU to a given layer, simple function for convenience, returns the pointer to the layer.
 
-inline float* NeuralNetwork::_ReLU(unsigned layer) const
+inline float* NeuralNetwork::_ReLU(unsigned layer)
 {
 	for (unsigned node = 0; node < layer_sizes[layer]; node++)
 		if (layers[layer][node] < 0.f) 
@@ -160,7 +174,7 @@ inline void NeuralNetwork::doBackPropagation(unsigned answer)
 
 			// Applies weight decay and stochastic gradient descent to every weight connected to this node
 			doWeightDecay(layer - 1, node);
-			addToWeights(-learning_rate * current_error_signal[node], layer - 1, node);
+			doWeightStep(current_error_signal[node], layer - 1, node);
 		}
 	}
 }
@@ -184,18 +198,21 @@ NeuralNetwork::NeuralNetwork(unsigned num_layers, unsigned const* layer_sizes):
 	for (unsigned l = 0; l < num_layers; l++)
 		this->layer_sizes[l] = layer_sizes[l];
 
-	// Initializes the weights
+	// Initializes the weights and velocity vector
 	weights = (float***)calloc(num_layers - 1, sizeof(float**));
+	velocity = (float***)calloc(num_layers - 1, sizeof(float**));
 
 	for (unsigned layer = 0u; layer < num_layers - 1; layer++)
 	{
 		weights[layer] = (float**)calloc(layer_sizes[layer + 1], sizeof(float*));
+		velocity[layer] = (float**)calloc(layer_sizes[layer + 1], sizeof(float*));
 
 		for (unsigned output = 0u; output < layer_sizes[layer + 1]; output++)
-			weights[layer][output] = (float*)calloc(layer_sizes[layer] + 1, sizeof(float));
+			weights[layer][output] = (float*)calloc(layer_sizes[layer] + 1, sizeof(float)),
+			velocity[layer][output] = (float*)calloc(layer_sizes[layer] + 1, sizeof(float));
 	}
 
-	// Randomizes the weights if needed
+	// Randomize the weights
 	randomizeWeights();
 
 	// Initializes the layer nodes, and error signal array. Input layer is excluded,
@@ -239,15 +256,18 @@ NeuralNetwork::NeuralNetwork(const char* stored_name)
 	layer_sizes = (unsigned*)calloc(num_layers, sizeof(unsigned));
 	fread(layer_sizes, sizeof(uint32_t), num_layers, weights_file);
 
-	// Initializes the weights and copies them from the file
+	// Initializes the velocity vector and weights and copies them from the file
+	velocity = (float***)calloc(num_layers - 1, sizeof(float**));
 	weights = (float***)calloc(num_layers - 1, sizeof(float**));
 
 	for (unsigned layer = 0u; layer < num_layers - 1; layer++)
 	{
+		velocity[layer] = (float**)calloc(layer_sizes[layer + 1], sizeof(float*));
 		weights[layer] = (float**)calloc(layer_sizes[layer + 1], sizeof(float*));
 
 		for (unsigned output = 0u; output < layer_sizes[layer + 1]; output++)
 		{
+			velocity[layer][output] = (float*)calloc(layer_sizes[layer] + 1, sizeof(float));
 			weights[layer][output] = (float*)calloc(layer_sizes[layer] + 1, sizeof(float));
 			fread(weights[layer][output], sizeof(float), layer_sizes[layer] + 1, weights_file);
 		}
@@ -274,11 +294,13 @@ NeuralNetwork::~NeuralNetwork()
 	for (unsigned layer = 0u; layer < num_layers - 1; layer++)
 	{
 		for (unsigned output = 0u; output < layer_sizes[layer + 1]; output++)
-			free(weights[layer][output]);
+			free(weights[layer][output]), free(velocity[layer][output]);
 
 		free(weights[layer]);
+		free(velocity[layer]);
 	}
 	free(weights);
+	free(velocity);
 
 	if (num_training_data)
 	{
@@ -419,7 +441,7 @@ cleanup:
 // Loads weights previously stored with the same name. If the neural network
 // structure does not match to the stored one with the same name it will fail.
 
-bool NeuralNetwork::loadWeights(const char* stored_name) const
+bool NeuralNetwork::loadWeights(const char* stored_name)
 {
 	if (!stored_name || !*stored_name)
 		return false;
@@ -567,6 +589,8 @@ void NeuralNetwork::trainWeights(unsigned epoch)
 	if (!num_training_data)
 		return;
 
+	resetVelocity();
+
 	for (unsigned iteration = 0; iteration < epoch; iteration++)
 		for (unsigned n = 0; n < num_training_data; n++)
 		{
@@ -665,4 +689,18 @@ float NeuralNetwork::getLearningRate() const
 void NeuralNetwork::setLearningRate(float rate)
 {
 	learning_rate = rate;
+}
+
+// Returns the momentum variable used for weight step
+
+float NeuralNetwork::getMomentum() const
+{
+	return gradient_momentum;
+}
+
+// Sets the momentum variable used for weight step
+
+void NeuralNetwork::setMomentum(float momentum)
+{
+	gradient_momentum = momentum;
 }
