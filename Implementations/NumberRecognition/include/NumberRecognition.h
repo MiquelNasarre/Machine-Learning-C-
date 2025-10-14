@@ -30,17 +30,13 @@ private:
 	~NumberRecognition();
 public:
 
-	// Generates the training values of a subset of the dataset,
-	// It returns the training values in the following order:
-	// ...
 	static float** getValues(Set test_train, size_t start_idx, size_t end_idx);
 
-	// Generates the training values of a subset of the dataset,
-	// It returns the training values in the following order:
-	// ...
 	static float** getImages(Set test_train, size_t start_idx, size_t end_idx);
 
 	static unsigned* getLabels(Set test_train, size_t start_idx, size_t end_idx);
 
 	static void printImage(Set test_train, size_t idx);
+
+	static unsigned getSize(Set test_train);
 };

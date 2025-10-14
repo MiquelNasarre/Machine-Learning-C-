@@ -461,3 +461,18 @@ void NumberRecognition::printImage(Set test_train, size_t idx)
         return;
     }
 }
+
+unsigned NumberRecognition::getSize(Set test_train)
+{
+    switch (test_train)
+    {
+    case TESTING:
+        return n_testing;
+
+    case TRAINING:
+        return n_training;
+
+    default:
+        return 0U;
+    }
+}

@@ -68,7 +68,7 @@ public:
 
 	// Replicates the neural network stored in file with that name, if it does not exist it will 
 	// throw a message, so make sure you only call it on a name existing in storage.
-	NeuralNetwork(const char* stored_name);
+	NeuralNetwork(const char* stored_name, const char* filename = "weights.bin");
 
 	// Frees the weight values and training data, unless stored, the current weights will be forgotten.
 	~NeuralNetwork();
@@ -80,11 +80,11 @@ public:
 	// with the name, the number of layers and the size of each layer.
 	// If the name already exists and the layout is the same it will override it.
 	// If the name already exists and the layout is not the same it will return false.
-	bool storeWeights(const char* stored_name) const;
+	bool storeWeights(const char* stored_name, const char* filename = "weights.bin") const;
 
 	// Loads weights previously stored with the same name. If the neural network
 	// structure does not match to the stored one with the same name it will fail.
-	bool loadWeights(const char* stored_name);
+	bool loadWeights(const char* stored_name, const char* filename = "weights.bin");
 
 	// Copies the new training inputs and outputs and adds it to its array. They must be ordered
 	// as follows: inputs[num_data][num_input_nodes], outputs[num_data][num_output_nodes].
@@ -109,9 +109,12 @@ public:
 	// Trains the weights with the current weight decay lambda using stochastic gradient descent.
 	void trainWeights(unsigned epoch);
 
+	// Trains the weights using cross validation and outputs expected error.
+	float trainCrossValidation(unsigned epoch, unsigned patience, unsigned n_batches);
+
 	// Trains the weights using cross validation (10% testing batches) for different values
 	// of lambda and learning rate, then trains the full set and outputs the expected error.
-	float train_CrossValidation();
+	float train_HyperParamCalibration();
 
 #ifdef _CONSOLE
 	// Prints the weights to the console.

@@ -1,12 +1,46 @@
 #include "NeuralNetwork.h"
 #include "NumberRecognition.h"
+#include "Image.h"
 #include "Timer.h"
 
 #include <cstdio>
 #include <random>
 
+//#define _TRAINING
+#define SHOWCASE "96.25%", "CV_3B1B"
+
+static void storeWeightsImages(float*** weights, unsigned n_neurons)
+{
+	Image image(280, 280);
+	Color* pixels = image.getPixels();
+	for (unsigned i = 0; i < 16; i++)
+	{
+		for (unsigned row = 0; row < 28; row++)
+			for (unsigned col = 0; col < 28; col++)
+			{
+				Color c = Color::Black;
+
+				float weight = 5 * weights[0][i][row * 28 + col];
+
+				if (weight < -1.f)weight = -1.f;
+				if (weight > 1.f)weight = 1.f;
+
+				weight = (weight + 1) / 2;
+
+				c.R = unsigned char((1 - weight) * 255);
+				c.B = unsigned char(weight * 255);
+
+				for (unsigned p = 0; p < 100; p++)
+					pixels[((10 * row) + (p / 10)) * 280 + (10 * col + p % 10)] = c;
+			}
+
+		image.save("images/weights_%u", i);
+	}
+}
+
 int main()
 {
+#ifdef _TRAINING
 	Timer timer;
 
 	const unsigned training_set_size = 60000;
@@ -17,7 +51,7 @@ int main()
 
 	const unsigned num_layers = 4;
 	const unsigned layers[] = { IMAGE_DIM, 16, 16, 10 };
-	const char* NN_name = "CV_3B1B";
+	const char* NN_name = "Training set";
 	
 	//const unsigned epoch = 5;
 	//const float learning_rate = 0.000001f;
@@ -52,7 +86,7 @@ int main()
 	printf("\nStarted cross validation training ...\n");
 
 	timer.mark();
-	NN.train_CrossValidation();
+	NN.train_HyperParamCalibration();
 	float time = timer.check();
 
 	printf("\nFinished cross validation in %.4fs, updated weights:\n", time);
@@ -63,9 +97,27 @@ int main()
 
 	NN.storeWeights(NN_name);
 
-	printf("Do you wanna see some examples? Y:N\n");
+#else
+
+	NeuralNetwork NN(SHOWCASE);
+
+	printf("Neural Network '%s' from file '%s' has been successfully loaded. Weights:\n", SHOWCASE);
+	NN.printWeights();
+	storeWeightsImages(NN.getWeights(), 16);
+
+	const unsigned testing_set_size = NumberRecognition::getSize(TESTING);
+	float* const* testing_data = NumberRecognition::getImages(TESTING, 0, testing_set_size);
+	unsigned const* testing_labels = NumberRecognition::getLabels(TESTING, 0, testing_set_size);
+
+	printf("\nTest Set Prediction Error: %.4f", NN.computePredictionError(testing_set_size, testing_data, testing_labels));
+	printf("\nTest Set Prediction Rate:  %.4f\n\n", NN.computePredictionRate(testing_set_size, testing_data, testing_labels));
+
+#endif
+
+repeat:
+	printf("\n\nDo you wanna see some examples? Y:N\n");
 	char c;
-	scanf("%c", &c);
+	scanf("\n%c", &c);
 	if (c != 'y' && c != 'Y')
 		return 0;
 
@@ -79,6 +131,5 @@ int main()
 		float* p = NN.predictCase(testing_data[idx]);
 		printf("\nprediction = { %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f }", p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9]);
 	}
-
-	return 0;
+	goto repeat;
 }

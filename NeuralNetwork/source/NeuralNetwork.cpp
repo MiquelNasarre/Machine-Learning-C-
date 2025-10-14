@@ -266,14 +266,18 @@ NeuralNetwork::NeuralNetwork(unsigned num_layers, unsigned const* layer_sizes):
 // Replicates the neural network stored in file with that name, if it does not exist it will 
 // throw a message, so make sure you only call it on a name existing in storage.
 
-NeuralNetwork::NeuralNetwork(const char* stored_name)
+NeuralNetwork::NeuralNetwork(const char* stored_name, const char* filename)
 {
 	// If invalid name fail
 	if (!stored_name || !*stored_name)
-		throw("Invalid storage name name");
+		throw("Invalid storage name");
+
+	// IF invalid file fail
+	if (!filename || !*filename)
+		throw("Invalid file name");
 
 	// If cannot open file fail
-	FILE* weights_file = fopen("weights", "rb");
+	FILE* weights_file = fopen(filename, "rb");
 	if (!weights_file)
 		throw("Cannot access weights file");
 
@@ -393,16 +397,19 @@ void NeuralNetwork::randomizeWeights()
 // If the name already exists and the layout is the same it will override it.
 // If the name already exists and the layout is not the same it will fail.
 
-bool NeuralNetwork::storeWeights(const char* stored_name) const
+bool NeuralNetwork::storeWeights(const char* stored_name, const char* filename) const
 {
 	// Okay this function works but is a bit of a mess, just trust it
 	if (!stored_name || !*stored_name)
 		return false;
 
+	if (!filename || !*filename)
+		return false;
+
 	// open weights file if failed create it
 	bool success = false;
 	binary_descriptor desc;
-	FILE* weights_file = fopen("weights", "rb+");
+	FILE* weights_file = fopen(filename, "rb+");
 	if (!weights_file)
 		goto for_new_file;
 
@@ -416,7 +423,7 @@ bool NeuralNetwork::storeWeights(const char* stored_name) const
 
 	for_new_file:
 
-		weights_file = fopen("weights", "ab");
+		weights_file = fopen(filename, "ab");
 		if (!weights_file)
 			return false;
 	
@@ -464,12 +471,15 @@ cleanup:
 // Loads weights previously stored with the same name. If the neural network
 // structure does not match to the stored one with the same name it will fail.
 
-bool NeuralNetwork::loadWeights(const char* stored_name)
+bool NeuralNetwork::loadWeights(const char* stored_name, const char* filename)
 {
 	if (!stored_name || !*stored_name)
 		return false;
 
-	FILE* weights_file = fopen("weights", "rb");
+	if (!filename || !*filename)
+		return false;
+
+	FILE* weights_file = fopen(filename, "rb");
 	if (!weights_file)
 		return false;
 
@@ -630,10 +640,66 @@ void NeuralNetwork::trainWeights(unsigned epoch)
 	learning_rate = initial_lr;
 }
 
+// Trains the weights using cross validation (10% testing batches) and outputs expected error.
+
+float NeuralNetwork::trainCrossValidation(unsigned epoch, unsigned patience, unsigned n_batches)
+{
+	float error = 0.f;
+	float initial_lr = learning_rate;
+	for (unsigned batch = 0; batch < n_batches; batch++)
+	{
+		// Reset weights and velocity vector
+		randomizeWeights();
+		resetVelocity();
+
+		// Set the boundries for the validation set
+		const unsigned start_validation_set = batch * num_training_data / n_batches;
+		const unsigned end_validation_set = (batch + 1) * num_training_data / n_batches;
+
+		// Train the neural network for a certain amount of epoch skipping the validation set
+		float current_best_error = INFINITY;
+		unsigned patience_counter = 0U;
+		for (unsigned iteration = 0; iteration < epoch; iteration++)
+		{
+			// Cosine decay for learning rate
+			learning_rate = lr_cosine(initial_lr, learning_rate_alpha, iteration, epoch);
+
+			// Train
+			for (unsigned n = 0; n < num_training_data; n++)
+			{
+				if (n >= start_validation_set && n < end_validation_set)
+					continue;
+
+				predictCase(training_inputs[n]);
+				doBackPropagation(training_answers[n]);
+			}
+
+			// Compute the error for the validation set
+			float validation_error = 0.f;
+			for (unsigned n = start_validation_set; n < end_validation_set; n++)
+				validation_error += outputError(training_inputs[n], training_answers[n]);
+
+			// Check if you've done better than before
+			if (validation_error < current_best_error)
+				current_best_error = validation_error, patience_counter = 0;
+
+			// If you run out of patience stop
+			else if (++patience_counter == patience)
+				break;
+
+		}
+
+		// Add validation error accumulates untill full mean error is computed
+		error += current_best_error / num_training_data;
+	}
+	learning_rate = initial_lr;
+	return error;
+}
+
 // Trains the weights using cross validation (10% testing batches) for different values
 // of lambda and learning rate, then trains the full set and outputs the expected error.
 
-float NeuralNetwork::train_CrossValidation()
+float NeuralNetwork::train_HyperParamCalibration()
 {
 	if (!num_training_data)
 		return INFINITY;
@@ -666,7 +732,7 @@ float NeuralNetwork::train_CrossValidation()
 	{
 		// Randomize the hyperparameters for new try
 		float rand = random_0_1();
-		float initial_lr = (learning_rate = expf(rand * logf(min_learning_rate) + (1 - rand) * logf(max_learning_rate)));
+		learning_rate = expf(rand * logf(min_learning_rate) + (1 - rand) * logf(max_learning_rate));
 
 		rand = random_0_1();
 		weight_decay_lambda = expf(rand * logf(min_weight_decay) + (1 - rand) * logf(max_weight_decay));
@@ -678,66 +744,21 @@ float NeuralNetwork::train_CrossValidation()
 		learning_rate_alpha = rand * min_lr_alpha + (1 - rand) * max_lr_alpha;
 
 		// Train for the total number of validation batches and store error
-		float error = 0.f;
-		for (unsigned batch = 0; batch < n_batches; batch++)
-		{
-			// Reset weights and velocity vector
-			randomizeWeights();
-			resetVelocity();
-
-			// Set the boundries for the validation set
-			const unsigned start_validation_set = batch * num_training_data / n_batches;
-			const unsigned end_validation_set = (batch + 1) * num_training_data / n_batches;
-
-			// Train the neural network for a certain amount of epoch skipping the validation set
-			float current_best_error = INFINITY;
-			unsigned patience_counter = 0U;
-			for (unsigned iteration = 0; iteration < epoch; iteration++)
-			{
-				// Cosine decay for learning rate
-				learning_rate = lr_cosine(initial_lr, learning_rate_alpha, iteration, epoch);
-
-				// Train
-				for (unsigned n = 0; n < num_training_data; n++)
-				{
-					if (n >= start_validation_set && n < end_validation_set)
-						continue;
-
-					predictCase(training_inputs[n]);
-					doBackPropagation(training_answers[n]);
-				}
-
-				// Compute the error for the validation set
-				float validation_error = 0.f;
-				for (unsigned n = start_validation_set; n < end_validation_set; n++)
-					validation_error += outputError(training_inputs[n], training_answers[n]);
-				
-				// Check if you've done better than before
-				if (validation_error < current_best_error)
-					current_best_error = validation_error, patience_counter = 0;
-
-				// If you run out of patience stop
-				else if (++patience_counter == patience)
-					break;
-
-			}
-
-			// Add validation error accumulates untill full mean error is computed
-			error += current_best_error / num_training_data;
-		}
+		float error = trainCrossValidation(epoch, patience, n_batches);
 
 		// If surpassed best score store the hyperparameters
 		if (error < best_mean_error)
 		{
 			best_mean_error = error;
-			best_learning_rate = initial_lr;
+			best_learning_rate = learning_rate;
 			best_lr_alpha = learning_rate_alpha;
 			best_momentum = gradient_momentum;
 			best_weight_decay = weight_decay_lambda;
 		}
-
-		printf("\n\nTraning try finished with parameters:\n  lambda = %.8f\n  learning_rate = %.5f\n  momentum = %.3f\n  lr_alpha = %.3f\nMean validation error was %.4f",
-			weight_decay_lambda, initial_lr, gradient_momentum, learning_rate_alpha, error);
+#ifdef _CONSOLE
+		printf("\n\nTraning try %u finished with parameters:\n  lambda = %.8f\n  learning_rate = %.5f\n  momentum = %.3f\n  lr_alpha = %.3f\nMean validation error was %.4f",
+			t, weight_decay_lambda, learning_rate, gradient_momentum, learning_rate_alpha, error);
+#endif
 	}
 	
 	// Set the best results for training and start the real training!
@@ -748,10 +769,10 @@ float NeuralNetwork::train_CrossValidation()
 
 	randomizeWeights();
 	trainWeights(epoch);
-
+#ifdef _CONSOLE
 	printf("\n\nTraning session finished with winning parameters:\n  lambda = %.8f\n  learning_rate = %.5f\n  momentum = %.3f\n  lr_alpha = %.3f\nMean expected error is %.4f",
 		best_weight_decay, best_learning_rate, best_momentum, best_lr_alpha, best_mean_error);
-
+#endif
 	return best_mean_error;
 }
 
