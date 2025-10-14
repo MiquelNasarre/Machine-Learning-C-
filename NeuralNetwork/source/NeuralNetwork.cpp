@@ -64,7 +64,7 @@ inline void NeuralNetwork::resetVelocity()
 {
 	for (unsigned layer = 0u; layer < num_layers - 1; layer++)
 		for (unsigned output = 0u; output < layer_sizes[layer + 1]; output++)
-			memset(velocity[layer][output], 0, (layer_sizes[layer] + 1) + sizeof(float));
+			memset(velocity[layer][output], 0, (layer_sizes[layer] + 1) * sizeof(float));
 }
 
 // Helper inline function to calculate the dot product between a set of weights and a layer.
@@ -81,13 +81,13 @@ inline float NeuralNetwork::_dot_prod(const unsigned input_layer, const unsigned
 }
 
 // Helper inline function to update a set of weights for one training iteration.
-// Updates the weights from one layer to a specific node by w[i_layer][o_node] += multiplier * layers[i_layer]
+// It uses polyak momentum on the stochastic gradient descent, to smooth out the learning.
 
 inline void NeuralNetwork::doWeightStep(const float error_signal, const unsigned input_layer, const unsigned output_node)
 {
 	float* node_weights = weights[input_layer][output_node];
 	float* node_velocity = velocity[input_layer][output_node];
-	const float const* layer = layers[input_layer];
+	const float* layer = layers[input_layer];
 	const float factor = -learning_rate * error_signal;
 	const unsigned layer_size = layer_sizes[input_layer];
 
@@ -177,6 +177,42 @@ inline void NeuralNetwork::doBackPropagation(unsigned answer)
 			doWeightStep(current_error_signal[node], layer - 1, node);
 		}
 	}
+}
+
+/*
+-------------------------------------------------------------------------------------------------------
+Other helpers
+-------------------------------------------------------------------------------------------------------
+*/
+
+// Used for learning rate decrease with epoch
+
+static inline float lr_cosine(float lr0, float alpha, unsigned t, unsigned T) 
+{
+	const float c = 0.5f * (1.0f + cosf(3.14159265f * (float)t / (float)T));
+	return lr0 * (alpha + (1.0f - alpha) * c);
+}
+
+// Mixes up the randomizer seed
+
+static inline unsigned long long& splitmix(unsigned long long& seed)
+{
+	seed += 0x9E3779B97F4A7C15ull;
+	seed = (seed ^ (seed >> 30)) * 0xBF58476D1CE4E5B9ull;
+	seed = (seed ^ (seed >> 27)) * 0x94D049BB133111EBull;
+	seed ^= (seed >> 31);
+	return seed;
+}
+
+// Generates random values between 0 and 1
+
+static inline float random_0_1()
+{
+	static unsigned long long seed = Timer::get_system_time_ns() 
+		^ (unsigned long long)(uintptr_t)&seed;
+
+	splitmix(seed), splitmix(seed), splitmix(seed);
+	return (splitmix(seed) >> 8) * (1.0f / 72057594037927936.0f); // 2^56
 }
 
 /*
@@ -327,21 +363,8 @@ User end functions
 
 // Randomizes the weights, unless stored, the current weights will be overwritten.
 
-static unsigned long long& splitmix(unsigned long long& seed)
-{
-	seed += 0x9E3779B97F4A7C15ull;
-	seed = (seed ^ (seed >> 30)) * 0xBF58476D1CE4E5B9ull;
-	seed = (seed ^ (seed >> 27)) * 0x94D049BB133111EBull;
-	seed ^= (seed >> 31);
-	return seed;
-}
-
 void NeuralNetwork::randomizeWeights()
 {
-	// Generate a random seed with splitmix
-	unsigned long long seed = Timer::get_system_time_ns() ^ (unsigned long long)(uintptr_t) & seed;
-	splitmix(seed), splitmix(seed), splitmix(seed);
-
 	// Set those randomized weights
 	for (unsigned layer = 0; layer < num_layers - 1; layer++)
 		for (unsigned output = 0; output < layer_sizes[layer + 1]; ++output)
@@ -359,7 +382,7 @@ void NeuralNetwork::randomizeWeights()
 			for (unsigned input = 0; input < layer_sizes[layer] + 1u; ++input)
 			{
 				// simple float from 64-bit: map [0,2^64) -> [0,1)
-				float u = (splitmix(seed) >> 8) * (1.0f / 72057594037927936.0f); // 2^56
+				float u = random_0_1(); // 2^56
 				weights[layer][output][input] = (2.0f * u - 1.0f) * range;
 			}
 		}
@@ -590,13 +613,21 @@ void NeuralNetwork::trainWeights(unsigned epoch)
 		return;
 
 	resetVelocity();
+	float initial_lr = learning_rate;
 
 	for (unsigned iteration = 0; iteration < epoch; iteration++)
+	{
+		// Cosine decay for learning rate
+		learning_rate = lr_cosine(initial_lr, learning_rate_alpha, iteration, epoch);
+
 		for (unsigned n = 0; n < num_training_data; n++)
 		{
 			predictCase(training_inputs[n]);
 			doBackPropagation(training_answers[n]);
 		}
+	}
+
+	learning_rate = initial_lr;
 }
 
 // Trains the weights using cross validation (10% testing batches) for different values
@@ -604,7 +635,124 @@ void NeuralNetwork::trainWeights(unsigned epoch)
 
 float NeuralNetwork::train_CrossValidation()
 {
-	return 0.f; // Not implemented yet :/
+	if (!num_training_data)
+		return INFINITY;
+
+	constexpr float min_learning_rate = 1e-5f;
+	constexpr float max_learning_rate = 1e-1f;
+
+	constexpr float min_lr_alpha = 0.005f;
+	constexpr float max_lr_alpha = 0.04f;
+
+	constexpr float min_weight_decay = 1e-10f;
+	constexpr float max_weight_decay = 1e-4f;
+
+	constexpr float min_momentum = 0.65f;
+	constexpr float max_momentum = 0.95f;
+
+	constexpr unsigned n_batches = 10;
+
+	constexpr unsigned tries = 50;
+	constexpr unsigned epoch = 20;
+	constexpr unsigned patience = 3;
+
+	float best_learning_rate;
+	float best_weight_decay;
+	float best_momentum;
+	float best_lr_alpha;
+	float best_mean_error = INFINITY;
+
+	for (unsigned t = 0; t < tries; t++)
+	{
+		// Randomize the hyperparameters for new try
+		float rand = random_0_1();
+		float initial_lr = (learning_rate = expf(rand * logf(min_learning_rate) + (1 - rand) * logf(max_learning_rate)));
+
+		rand = random_0_1();
+		weight_decay_lambda = expf(rand * logf(min_weight_decay) + (1 - rand) * logf(max_weight_decay));
+
+		rand = random_0_1();
+		gradient_momentum = rand * min_momentum + (1 - rand) * max_momentum;
+
+		rand = random_0_1();
+		learning_rate_alpha = rand * min_lr_alpha + (1 - rand) * max_lr_alpha;
+
+		// Train for the total number of validation batches and store error
+		float error = 0.f;
+		for (unsigned batch = 0; batch < n_batches; batch++)
+		{
+			// Reset weights and velocity vector
+			randomizeWeights();
+			resetVelocity();
+
+			// Set the boundries for the validation set
+			const unsigned start_validation_set = batch * num_training_data / n_batches;
+			const unsigned end_validation_set = (batch + 1) * num_training_data / n_batches;
+
+			// Train the neural network for a certain amount of epoch skipping the validation set
+			float current_best_error = INFINITY;
+			unsigned patience_counter = 0U;
+			for (unsigned iteration = 0; iteration < epoch; iteration++)
+			{
+				// Cosine decay for learning rate
+				learning_rate = lr_cosine(initial_lr, learning_rate_alpha, iteration, epoch);
+
+				// Train
+				for (unsigned n = 0; n < num_training_data; n++)
+				{
+					if (n >= start_validation_set && n < end_validation_set)
+						continue;
+
+					predictCase(training_inputs[n]);
+					doBackPropagation(training_answers[n]);
+				}
+
+				// Compute the error for the validation set
+				float validation_error = 0.f;
+				for (unsigned n = start_validation_set; n < end_validation_set; n++)
+					validation_error += outputError(training_inputs[n], training_answers[n]);
+				
+				// Check if you've done better than before
+				if (validation_error < current_best_error)
+					current_best_error = validation_error, patience_counter = 0;
+
+				// If you run out of patience stop
+				else if (++patience_counter == patience)
+					break;
+
+			}
+
+			// Add validation error accumulates untill full mean error is computed
+			error += current_best_error / num_training_data;
+		}
+
+		// If surpassed best score store the hyperparameters
+		if (error < best_mean_error)
+		{
+			best_mean_error = error;
+			best_learning_rate = initial_lr;
+			best_lr_alpha = learning_rate_alpha;
+			best_momentum = gradient_momentum;
+			best_weight_decay = weight_decay_lambda;
+		}
+
+		printf("\n\nTraning try finished with parameters:\n  lambda = %.8f\n  learning_rate = %.5f\n  momentum = %.3f\n  lr_alpha = %.3f\nMean validation error was %.4f",
+			weight_decay_lambda, initial_lr, gradient_momentum, learning_rate_alpha, error);
+	}
+	
+	// Set the best results for training and start the real training!
+	learning_rate = best_learning_rate;
+	learning_rate_alpha = best_lr_alpha;
+	gradient_momentum = best_momentum;
+	weight_decay_lambda = best_weight_decay;
+
+	randomizeWeights();
+	trainWeights(epoch);
+
+	printf("\n\nTraning session finished with winning parameters:\n  lambda = %.8f\n  learning_rate = %.5f\n  momentum = %.3f\n  lr_alpha = %.3f\nMean expected error is %.4f",
+		best_weight_decay, best_learning_rate, best_momentum, best_lr_alpha, best_mean_error);
+
+	return best_mean_error;
 }
 
 #ifdef _CONSOLE

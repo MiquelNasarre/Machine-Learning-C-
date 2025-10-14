@@ -32,6 +32,7 @@ private:
 	float learning_rate = 0.005f;			// Learning rate used for GD and perceptron
 	float weight_decay_lambda = 1e-8f;		// Stores the lambda for weight decay training
 	float gradient_momentum = 0.85f;		// Momentum variable used for SGD with momentum
+	float learning_rate_alpha = 0.02f;		// Stores the alpha decrement of the weight decay
 
 	float** training_inputs = nullptr;		// Stores inputs for training.
 	unsigned* training_answers = nullptr;	// Stores correct answers for training.
@@ -44,7 +45,7 @@ private:
 	// Helper inline function to calculate the dot product between a set of weights and a layer.
 	inline float _dot_prod(const unsigned input_layer, const unsigned output_node);
 	// Helper inline function to update a set of weights for one training iteration.
-	// Updates the weights from one layer to a specific node by w[i_layer][o_node] += multiplier * layers[i_layer]
+	// It uses polyak momentum on the stochastic gradient descent, to smooth out the learning.
 	inline void doWeightStep(const float error_signal, const unsigned input_layer, const unsigned output_node);
 	// Helper inline function that performs a weight decay step on a set of weights.
 	inline void doWeightDecay(const unsigned input_layer, const unsigned output_node);

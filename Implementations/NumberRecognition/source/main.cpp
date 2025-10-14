@@ -17,12 +17,12 @@ int main()
 
 	const unsigned num_layers = 4;
 	const unsigned layers[] = { IMAGE_DIM, 16, 16, 10 };
-	const char* NN_name = "3B1B";
+	const char* NN_name = "CV_3B1B";
 	
-	const unsigned epoch = 5;
-	const float learning_rate = 0.000001f;
-	const float weight_decay = 1e-8f;
-	const float momentum = 0.9f;
+	//const unsigned epoch = 5;
+	//const float learning_rate = 0.000001f;
+	//const float weight_decay = 1e-8f;
+	//const float momentum = 0.9f;
 
 	//float* const* training_values = NumberRecognition::getValues(TRAINING, training_set_start, training_set_size + training_set_start);
 	float* const* training_images = NumberRecognition::getImages(TRAINING, training_set_start, training_set_size + training_set_start);
@@ -36,10 +36,10 @@ int main()
 	float* const* testing_data = testing_images;
 
 	NeuralNetwork NN(num_layers, layers);
-	NN.setLearningRate(learning_rate);
-	NN.setWeightDecay(weight_decay);
-	NN.setMomentum(momentum);
-	NN.loadWeights(NN_name);
+	//NN.setLearningRate(learning_rate);
+	//NN.setWeightDecay(weight_decay);
+	//NN.setMomentum(momentum);
+	//NN.loadWeights(NN_name);
 
 	printf("Neural Network correctly generated, Initial weights:\n");
 	NN.printWeights();
@@ -49,13 +49,13 @@ int main()
 
 	NN.feedData(training_set_size, training_data, training_labels);
 
-	printf("\nStarted training for %u epoch ...\n", epoch);
+	printf("\nStarted cross validation training ...\n");
 
 	timer.mark();
-	NN.trainWeights(epoch);
+	NN.train_CrossValidation();
 	float time = timer.check();
 
-	printf("\nFinished training for %u epoch in %.4fs, updated weights:\n", epoch, time);
+	printf("\nFinished cross validation in %.4fs, updated weights:\n", time);
 	NN.printWeights();
 
 	printf("\nUpdated Prediction Error: %.4f", NN.computePredictionError(testing_set_size, testing_data, testing_labels));
