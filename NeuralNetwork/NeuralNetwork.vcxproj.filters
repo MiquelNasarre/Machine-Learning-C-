@@ -22,5 +22,8 @@
     <ClInclude Include="include\NeuralNetwork.h">
       <Filter>Sources\Public</Filter>
     </ClInclude>
+    <ClInclude Include="include\LinearAlgebra.h">
+      <Filter>Sources\Public</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

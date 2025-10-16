@@ -153,7 +153,7 @@ User end functions
 
 // Returns the pointer to the image pixels as a color array
 
-Color* Image::getPixels() const
+Color* Image::getPixels()
 {
     return Pixels;
 }

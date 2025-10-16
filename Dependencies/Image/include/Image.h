@@ -43,7 +43,7 @@ public:
 	~Image();
 
 	// Returns the pointer to the image pixels as a color array
-	Color* getPixels() const;
+	Color* getPixels();
 
 	// Returns the image width
 	unsigned getWidth() const;

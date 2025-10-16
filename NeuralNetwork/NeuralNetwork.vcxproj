@@ -22,6 +22,7 @@
     <ClCompile Include="source\NeuralNetwork.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="include\LinearAlgebra.h" />
     <ClInclude Include="include\NeuralNetwork.h" />
   </ItemGroup>
   <PropertyGroup Label="Globals">

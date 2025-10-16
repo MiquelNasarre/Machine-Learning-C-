@@ -20,14 +20,7 @@ decay, and cross validation to obtimise the weight decay variable.
 class NeuralNetwork
 {
 private:
-	unsigned	num_layers = 0u;			// Stores the number of layers
-	unsigned* layer_sizes = nullptr;		// Stores the size for each layer
-
-	float* output_layer;					// Pointer to the last layer for convenience
-	float** error_signal = nullptr;			// Stores the error signal to each layer
-	float** layers = nullptr;				// Stores the nodes of the neural network
-	float*** weights = nullptr;				// Stores the weights of the neural network
-	float*** velocity = nullptr;			// Stores historical gradient of the weights
+	void* matrixData = nullptr;				// Stores matrixData obj as void* see source code
 
 	float learning_rate = 0.005f;			// Learning rate used for GD and perceptron
 	float weight_decay_lambda = 1e-8f;		// Stores the lambda for weight decay training
@@ -42,23 +35,15 @@ private:
 
 	// Sets the velocity vector to zero for new training round.
 	inline void resetVelocity();
-	// Helper inline function to calculate the dot product between a set of weights and a layer.
-	inline float _dot_prod(const unsigned input_layer, const unsigned output_node);
-	// Helper inline function to update a set of weights for one training iteration.
-	// It uses polyak momentum on the stochastic gradient descent, to smooth out the learning.
-	inline void doWeightStep(const float error_signal, const unsigned input_layer, const unsigned output_node);
-	// Helper inline function that performs a weight decay step on a set of weights.
-	inline void doWeightDecay(const unsigned input_layer, const unsigned output_node);
-	// Normalizes the output values using the softmax activation function, returns the pointer to the output.
-	inline float* _softmax();
-	// Applies ReLU to a given layer, simple function for convenience, returns the pointer to the layer.
-	inline float* _ReLU(unsigned layer);
 	// Applies back propagation gradient descent given a single training example.
 	inline void doBackPropagation(unsigned answer);
+	// Applies a forward pass of the Neural Network given an input.
+	inline void doForwardPass();
 
 	// No copies allowed
-	NeuralNetwork(const NeuralNetwork& other) = delete;
-	NeuralNetwork operator=(const NeuralNetwork& other) = delete;
+	NeuralNetwork(const NeuralNetwork&) = delete;
+	NeuralNetwork& operator=(const NeuralNetwork&) = delete;
+
 
 public:
 	// Creates the neural network and randomly initialises the weights or initialises them to zero.
@@ -68,7 +53,7 @@ public:
 
 	// Replicates the neural network stored in file with that name, if it does not exist it will 
 	// throw a message, so make sure you only call it on a name existing in storage.
-	NeuralNetwork(const char* stored_name, const char* filename = "weights.bin");
+	NeuralNetwork(const char* stored_name, const char* filename = "weights");
 
 	// Frees the weight values and training data, unless stored, the current weights will be forgotten.
 	~NeuralNetwork();
@@ -80,15 +65,19 @@ public:
 	// with the name, the number of layers and the size of each layer.
 	// If the name already exists and the layout is the same it will override it.
 	// If the name already exists and the layout is not the same it will return false.
-	bool storeWeights(const char* stored_name, const char* filename = "weights.bin") const;
+	bool storeWeights(const char* stored_name, const char* filename = "weights") const;
 
 	// Loads weights previously stored with the same name. If the neural network
 	// structure does not match to the stored one with the same name it will fail.
-	bool loadWeights(const char* stored_name, const char* filename = "weights.bin");
+	bool loadWeights(const char* stored_name, const char* filename = "weights");
 
 	// Copies the new training inputs and outputs and adds it to its array. They must be ordered
 	// as follows: inputs[num_data][num_input_nodes], outputs[num_data][num_output_nodes].
 	void feedData(unsigned num_data, float* const* new_training_inputs, unsigned const* correct_answers);
+
+	// Releases all the training examples stored in the neural network data,
+	// for better memory management. New data can be feeded normally.
+	void freeData();
 
 	// Using the current weights for the model outputs a prediction given an input.
 	// If an output pointer is set, it will write it there, otherwise it creates a new one.
@@ -114,7 +103,7 @@ public:
 
 	// Trains the weights using cross validation (10% testing batches) for different values
 	// of lambda and learning rate, then trains the full set and outputs the expected error.
-	float train_HyperParamCalibration();
+	float train_HyperParamCalibration(unsigned tries, unsigned epoch);
 
 #ifdef _CONSOLE
 	// Prints the weights to the console.
@@ -123,11 +112,14 @@ public:
 
 	// Getters and Setters
 
-	float*** getWeights() const;			// Returns a pointer to the set of weights
+	float*	 getWeights(unsigned layer);	// Returns a pointer to the weights of a specific layer
+	float*   getBiases(unsigned layer);		// Returns a pointer to the biases of a specific layer
 	float	 getWeightDecayLambda() const;	// Returns the lambda used for weight decay
 	void	 setWeightDecay(float lambda);	// Sets the lambda used for weight decay
 	float	 getLearningRate() const;		// Returns the learning rate used for training
 	void	 setLearningRate(float rate);	// Sets the learning rate used for training
 	float	 getMomentum() const;			// Returns the momentum variable used for weight step
 	void	 setMomentum(float momentum);	// Sets the momentum variable used for weight step
+	float	 getLRalpha() const;			// Returns the alpha variable used for learning rate decay
+	void	 setLRalpha(float alpha);		// Sets the alpha variable used for learning rate decay
 };

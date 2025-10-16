@@ -1,10 +1,89 @@
 #include "NeuralNetwork.h"
+#include "LinearAlgebra.h"
 #include "Timer.h"
 
 #include <cstdlib>
+#include <cstring>
 #include <cstdint>
 #include <cstdio>
 #include <cmath>
+
+// Keeps track of the version for storage file compatibility
+constexpr uint32_t VERSION = 0x02UL;
+
+// This struct contains all the matrix needed for the Neural Network to
+// perform operations, it is stored inside the class masked as a void*.
+struct MATRIX_DATA
+{
+	unsigned num_layers = 0u;				// Stores the number of layers
+	unsigned* layer_sizes = nullptr;		// Stores the size for each layer
+
+	
+	Matrix* Weights = nullptr;				// Stores the weights matrix for each layer
+	Matrix* Velocity = nullptr;				// Stores the velocity matrix for each layer
+	Matrix* Gradient = nullptr;				// Stores the gradients for the weights
+
+	Vector* biases = nullptr;				// Stores the biases vector for each layer
+	Vector* b_velocity = nullptr;			// Stores the velocity vector for each layer bias
+	Vector* b_gradient = nullptr;			// Stores the gradient for the biases
+
+	Vector* error_signal = nullptr;			// Stores the error signal vector for each layer
+	Vector* layers = nullptr;				// Stores the nodes vector for each Layer
+
+	Vector& output_layer;					// Output layer reference for convenience
+	Vector& input_layer;					// Input layer reference for convenience
+
+	// Initialises all the matrices and vectors
+	MATRIX_DATA(const unsigned new_num_layers, const unsigned* new_layer_sizes) :
+		num_layers		{ new_num_layers >= 2 ? new_num_layers : throw("The number of layers to create a NeuralNetwork must be at least 2") },
+		layer_sizes		{ (unsigned*)calloc(new_num_layers, sizeof(unsigned)) },
+		Weights			{ new Matrix[new_num_layers - 1] },
+		Velocity		{ new Matrix[new_num_layers - 1] },
+		Gradient		{ new Matrix[new_num_layers - 1] },
+		biases			{ new Vector[new_num_layers - 1] },
+		b_velocity		{ new Vector[new_num_layers - 1] },
+		b_gradient		{ new Vector[new_num_layers - 1] },
+		layers			{ new Vector[new_num_layers] },
+		error_signal	{ new Vector[new_num_layers] },
+		input_layer		{ layers[0] },
+		output_layer	{ layers[new_num_layers - 1] }
+	{
+
+		// Copies the layer sizes for internal storage
+		for (unsigned l = 0; l < num_layers; l++)
+			layer_sizes[l] = new_layer_sizes[l];
+
+		// Initializes the weights and velocity vector
+		for (unsigned layer = 0u; layer < num_layers - 1; layer++)
+			Weights[layer].init(layer_sizes[layer + 1], layer_sizes[layer]),
+			Velocity[layer].init(layer_sizes[layer + 1], layer_sizes[layer]),
+			Gradient[layer].init(layer_sizes[layer + 1], layer_sizes[layer]),
+			biases[layer].init(layer_sizes[layer + 1]),
+			b_velocity[layer].init(layer_sizes[layer + 1]),
+			b_gradient[layer].init(layer_sizes[layer + 1]);
+
+		// Initializes the layer nodes, and error signal matrices. Input layer is excluded,
+		// since it is provided by the training data and does not apply for error signal.
+		for (unsigned layer = 1; layer < num_layers; layer++)
+			layers[layer].init(layer_sizes[layer]),
+			error_signal[layer].init(layer_sizes[layer]);
+	}
+
+	// Deletes all the matrices and vectors
+	~MATRIX_DATA()
+	{
+		delete[] Weights;
+		delete[] Velocity;
+		delete[] Gradient;
+		delete[] error_signal;
+		delete[] layers;
+		delete[] biases;
+		delete[] b_velocity;
+		delete[] b_gradient;
+
+		free(layer_sizes);
+	}
+};
 
 /*
 -------------------------------------------------------------------------------------------------------
@@ -13,10 +92,10 @@ Utilities for binary file storage
 */
 
 // Header on any set of wieghts stored in file.
-
 struct binary_descriptor
 {
-	static constexpr uint32_t default_magic = 0x00CA0020UL;
+	static constexpr uint32_t default_magic = 0x00CA0200UL + VERSION;
+
 	uint32_t magic;
 	uint32_t n_layers;
 	char name[40] = {};
@@ -24,7 +103,6 @@ struct binary_descriptor
 
 // On match: returns a descriptor with proper magic and leaves `file`
 // positioned immediately after the descriptor (before layer sizes).
-
 static inline binary_descriptor find_in_file(const char* stored_name, FILE*& file)
 {
 	binary_descriptor desc;
@@ -32,7 +110,7 @@ static inline binary_descriptor find_in_file(const char* stored_name, FILE*& fil
 	{
 		// Check wether the magic holds, for file corruption
 		if (desc.magic != binary_descriptor::default_magic)
-			return { 0,0 };
+			return { 0,1 };
 
 		// Checks if the name is the same
 		for (unsigned i = 0; i < 40 && stored_name[i] == desc.name[i]; i++)
@@ -41,11 +119,13 @@ static inline binary_descriptor find_in_file(const char* stored_name, FILE*& fil
 
 		// Stores the layer sizes
 		uint32_t* file_layer_sizes = (uint32_t*)calloc(desc.n_layers, sizeof(uint32_t));
-		fread(file_layer_sizes, sizeof(uint32_t), desc.n_layers, file);
+		if(fread(file_layer_sizes, sizeof(uint32_t), desc.n_layers, file) != desc.n_layers)
+			return { 0,1 };
 
 		// Skip to next set of weights
 		for (unsigned i = 0; i < desc.n_layers - 1; i++)
-			fseek(file, (file_layer_sizes[i] + 1) * file_layer_sizes[i + 1] * sizeof(float), SEEK_CUR);
+			if (fseek(file, (file_layer_sizes[i] + 1) * file_layer_sizes[i + 1] * sizeof(float), SEEK_CUR) != 0)
+				return { 0,1 };
 		free(file_layer_sizes);
 
 	}
@@ -62,121 +142,68 @@ Inline private helpers
 
 inline void NeuralNetwork::resetVelocity()
 {
-	for (unsigned layer = 0u; layer < num_layers - 1; layer++)
-		for (unsigned output = 0u; output < layer_sizes[layer + 1]; output++)
-			memset(velocity[layer][output], 0, (layer_sizes[layer] + 1) * sizeof(float));
-}
+	MATRIX_DATA& M = *((MATRIX_DATA*)matrixData);
 
-// Helper inline function to calculate the dot product between a set of weights and a layer.
-
-inline float NeuralNetwork::_dot_prod(const unsigned input_layer, const unsigned output_node)
-{
-	float* o_weights = weights[input_layer][output_node];
-	float dot_prod = 0;
-
-	for (unsigned i = 0; i < layer_sizes[input_layer]; i++)
-		dot_prod += o_weights[i] * layers[input_layer][i];
-
-	return dot_prod + o_weights[layer_sizes[input_layer]];
-}
-
-// Helper inline function to update a set of weights for one training iteration.
-// It uses polyak momentum on the stochastic gradient descent, to smooth out the learning.
-
-inline void NeuralNetwork::doWeightStep(const float error_signal, const unsigned input_layer, const unsigned output_node)
-{
-	float* node_weights = weights[input_layer][output_node];
-	float* node_velocity = velocity[input_layer][output_node];
-	const float* layer = layers[input_layer];
-	const float factor = -learning_rate * error_signal;
-	const unsigned layer_size = layer_sizes[input_layer];
-
-	unsigned i = 0;
-	for (; i < layer_size; i++)
-		node_weights[i] += (node_velocity[i] = node_velocity[i] * gradient_momentum + factor * layer[i]);
-
-	node_weights[i] += (node_velocity[i] = node_velocity[i] * gradient_momentum + factor);
-}
-
-// Helper inline function that performs a weight decay step on a set of weights.
-
-inline void NeuralNetwork::doWeightDecay(const unsigned input_layer, const unsigned output_node)
-{
-	float* o_weights = weights[input_layer][output_node];
-	float factor = 1.f - weight_decay_lambda * learning_rate;
-
-	for (unsigned i = 0; i < layer_sizes[input_layer]; i++)
-		o_weights[i] *= factor;
-}
-
-// Normalizes the output values using the softmax activation function, returns the pointer to the output.
-
-inline float* NeuralNetwork::_softmax()
-{
-	float max = output_layer[0];
-	for (unsigned node = 1; node < layer_sizes[num_layers - 1]; node++)
-		if (max < output_layer[node])
-			max = output_layer[node];
-
-	float total = 0.f;
-	for (unsigned node = 0; node < layer_sizes[num_layers - 1]; node++)
-	{
-		output_layer[node] = expf(output_layer[node] - max);
-		total += output_layer[node];
-	}
-
-	for (unsigned node = 0; node < layer_sizes[num_layers - 1]; node++)
-		output_layer[node] /= total;
-
-	return output_layer;
-}
-
-// Applies ReLU to a given layer, simple function for convenience, returns the pointer to the layer.
-
-inline float* NeuralNetwork::_ReLU(unsigned layer)
-{
-	for (unsigned node = 0; node < layer_sizes[layer]; node++)
-		if (layers[layer][node] < 0.f) 
-			layers[layer][node] = 0.f;
-
-	return layers[layer];
+	for (unsigned layer = 0u; layer < M.num_layers - 1; layer++)
+		M.Velocity[layer].zero(),
+		M.b_velocity[layer].zero();
 }
 
 // Applies back propagation gradient descent given a single training example.
 
 inline void NeuralNetwork::doBackPropagation(unsigned answer)
 {
+	MATRIX_DATA& M = *((MATRIX_DATA*)matrixData);
+
 	// Assigns the initial error signals given by the formula D_Loss = p_i - y_i
-	for (unsigned node = 0; node < layer_sizes[num_layers - 1]; node++)
-		error_signal[num_layers - 1][node] = output_layer[node];
-	error_signal[num_layers - 1][answer]--;
+	
+	M.error_signal[M.num_layers - 1].copy_from(M.output_layer);
+	M.error_signal[M.num_layers - 1](answer) -= 1.f;
 
 	// Iterates through the layers from output to input doing back propagation
-	for (unsigned layer = num_layers - 1; layer > 0; layer--)
+	for (int layer = M.num_layers - 2; layer >= 0; layer--)
 	{
-		// Sets the error signals to work with in the current layer
-		float* current_error_signal = error_signal[layer];
-		// Sets the error signals for the next iteration and resets them
-		float* next_error_signal = error_signal[layer - 1];
-		if(layer > 1)
-			memset(next_error_signal, 0, layer_sizes[layer - 1] * sizeof(float));
-
-		// Iterates through all the nodes of the layer applying weight decay and gradient descent
-		// and computing next error signal by adding the error of each independent weight
-		for (unsigned node = 0; node < layer_sizes[layer]; node++)
+		// If not on the last step compute previous layer error signal
+		if (layer > 0)
 		{
-			// If not on the last step compute previous layer error signal
-			if (layer > 1)
-				for (unsigned i = 0; i < layer_sizes[layer - 1]; i++)
-					// Only compute error signal if previous node is activated
-					if (layers[layer - 1][i])
-						next_error_signal[i] += current_error_signal[node] * weights[layer - 1][node][i];
-
-			// Applies weight decay and stochastic gradient descent to every weight connected to this node
-			doWeightDecay(layer - 1, node);
-			doWeightStep(current_error_signal[node], layer - 1, node);
+			gemm(M.Weights[layer], M.error_signal[layer + 1], M.error_signal[layer], 1.f, 0.f, true /* transpose Weights */);
+			M.error_signal[layer].relu_grad_inplace(M.layers[layer]);
 		}
+
+		// Compute the gradient for the current layer including weight decay
+		gemm(M.error_signal[layer + 1], M.layers[layer], M.Gradient[layer]);
+		axpy(M.Weights[layer], M.Gradient[layer], weight_decay_lambda); // Weight decay
+
+		M.b_gradient[layer].copy_from(M.error_signal[layer + 1]); // Biases
+
+		// Update the velocity matrix with the gradient, learning rate and momentum
+		axpby(M.Gradient[layer], M.Velocity[layer], -learning_rate, gradient_momentum);
+
+		axpby(M.b_gradient[layer], M.b_velocity[layer], -learning_rate, gradient_momentum); // Biases
+
+		// Update weights with velocity
+		add(M.Weights[layer], M.Velocity[layer], M.Weights[layer]);
+
+		add(M.biases[layer], M.b_velocity[layer], M.biases[layer]); // Biases
 	}
+}
+
+// Applies a forward pass of the Neural Network given an input.
+
+inline void NeuralNetwork::doForwardPass()
+{
+	MATRIX_DATA& M = *((MATRIX_DATA*)matrixData);
+
+	// Iterates through the layers computing the dot product and applying ReLU to inner layers
+	for (unsigned layer = 0; layer < M.num_layers - 1; layer++)
+	{
+		axpb(M.Weights[layer], M.layers[layer], M.biases[layer], M.layers[layer + 1]);
+
+		if (layer < M.num_layers - 2)
+			M.layers[layer + 1]._relu();
+	}
+	// applies softmax to the output layer
+	M.output_layer._softmax();
 }
 
 /*
@@ -211,7 +238,6 @@ static inline float random_0_1()
 	static unsigned long long seed = Timer::get_system_time_ns() 
 		^ (unsigned long long)(uintptr_t)&seed;
 
-	splitmix(seed), splitmix(seed), splitmix(seed);
 	return (splitmix(seed) >> 8) * (1.0f / 72057594037927936.0f); // 2^56
 }
 
@@ -225,42 +251,10 @@ Constructor / Destructor
 // The type, number of inputs and number of outputs must be specified for creation.
 
 NeuralNetwork::NeuralNetwork(unsigned num_layers, unsigned const* layer_sizes):
-	num_layers{num_layers}, layer_sizes{ (unsigned*)calloc(num_layers, sizeof(unsigned)) }
+	matrixData{ (void*)new MATRIX_DATA(num_layers, layer_sizes) }
 {
-	if (num_layers < 2)
-		throw("The number of layers to create a NeuralNetwork must be at least 2");
-
-	// Copies the layer sizes for internal storage
-	for (unsigned l = 0; l < num_layers; l++)
-		this->layer_sizes[l] = layer_sizes[l];
-
-	// Initializes the weights and velocity vector
-	weights = (float***)calloc(num_layers - 1, sizeof(float**));
-	velocity = (float***)calloc(num_layers - 1, sizeof(float**));
-
-	for (unsigned layer = 0u; layer < num_layers - 1; layer++)
-	{
-		weights[layer] = (float**)calloc(layer_sizes[layer + 1], sizeof(float*));
-		velocity[layer] = (float**)calloc(layer_sizes[layer + 1], sizeof(float*));
-
-		for (unsigned output = 0u; output < layer_sizes[layer + 1]; output++)
-			weights[layer][output] = (float*)calloc(layer_sizes[layer] + 1, sizeof(float)),
-			velocity[layer][output] = (float*)calloc(layer_sizes[layer] + 1, sizeof(float));
-	}
-
 	// Randomize the weights
 	randomizeWeights();
-
-	// Initializes the layer nodes, and error signal array. Input layer is excluded,
-	// since it is provided by the training data and does not apply for error signal.
-	layers = (float**)calloc(num_layers, sizeof(float*));
-	error_signal = (float**)calloc(num_layers, sizeof(float*));
-
-	for (unsigned layer = 1; layer < num_layers; layer++)
-		layers[layer] = (float*)calloc(layer_sizes[layer], sizeof(float)), 
-		error_signal[layer] = (float*)calloc(layer_sizes[layer], sizeof(float));
-
-	output_layer = layers[num_layers - 1];
 }
 
 // Replicates the neural network stored in file with that name, if it does not exist it will 
@@ -288,75 +282,53 @@ NeuralNetwork::NeuralNetwork(const char* stored_name, const char* filename)
 	if (!desc.magic)
 	{
 		fclose(weights_file);
+
+		if(desc.n_layers == 1)
+			throw("File corrupted or from older version");
+
 		throw("Neural Network not found in file");
 	}
 
-	// Copies the layer layout for internal storage
-	num_layers = desc.n_layers;
-	layer_sizes = (unsigned*)calloc(num_layers, sizeof(unsigned));
-	fread(layer_sizes, sizeof(uint32_t), num_layers, weights_file);
+	// Initializes the matrix data with the layer layout found in the file
+	unsigned* layer_sizes = (unsigned*)calloc(desc.n_layers, sizeof(unsigned));
+	fread(layer_sizes, sizeof(uint32_t), desc.n_layers, weights_file);
 
-	// Initializes the velocity vector and weights and copies them from the file
-	velocity = (float***)calloc(num_layers - 1, sizeof(float**));
-	weights = (float***)calloc(num_layers - 1, sizeof(float**));
+	matrixData = (void*)new MATRIX_DATA(desc.n_layers, layer_sizes);
+	MATRIX_DATA& M = *((MATRIX_DATA*)matrixData);
+	free(layer_sizes);
 
-	for (unsigned layer = 0u; layer < num_layers - 1; layer++)
+	// Copies the weights from the array into the object stored weights
+	for (unsigned layer = 0; layer < M.num_layers - 1; layer++)
 	{
-		velocity[layer] = (float**)calloc(layer_sizes[layer + 1], sizeof(float*));
-		weights[layer] = (float**)calloc(layer_sizes[layer + 1], sizeof(float*));
+		size_t num_weights = M.layer_sizes[layer];
+		size_t num_biases = M.layer_sizes[layer + 1];
 
-		for (unsigned output = 0u; output < layer_sizes[layer + 1]; output++)
+		for (unsigned output_node = 0; output_node < M.layer_sizes[layer + 1]; output_node++)
+			if (fread(M.Weights[layer].data() + output_node * M.Weights[layer].ld(), sizeof(float), num_weights, weights_file) != num_weights)
+			{
+				fclose(weights_file);
+				delete& M;
+				throw("Unable to read data from file, may be corrupted");
+			}
+
+		if (fread(M.biases[layer].data(), sizeof(float), num_biases, weights_file) != num_biases)
 		{
-			velocity[layer][output] = (float*)calloc(layer_sizes[layer] + 1, sizeof(float));
-			weights[layer][output] = (float*)calloc(layer_sizes[layer] + 1, sizeof(float));
-			fread(weights[layer][output], sizeof(float), layer_sizes[layer] + 1, weights_file);
+			fclose(weights_file);
+			delete& M;
+			throw("Unable to read data from file, may be corrupted");
 		}
 	}
 
-	// Initializes the layer nodes, and error signal array. Input layer is excluded,
-	// since it is provided by the training data and does not apply for error signal.
-	layers = (float**)calloc(num_layers, sizeof(float*));
-	error_signal = (float**)calloc(num_layers, sizeof(float*));
-
-	for (unsigned layer = 1; layer < num_layers; layer++)
-		layers[layer] = (float*)calloc(layer_sizes[layer], sizeof(float)),
-		error_signal[layer] = (float*)calloc(layer_sizes[layer], sizeof(float));
-
-	output_layer = layers[num_layers - 1];
-
+	fclose(weights_file);
 }
 
 // Frees the weight values and training data, unless stored, the current weights will be forgotten.
 
 NeuralNetwork::~NeuralNetwork()
 {
+	freeData();
 
-	for (unsigned layer = 0u; layer < num_layers - 1; layer++)
-	{
-		for (unsigned output = 0u; output < layer_sizes[layer + 1]; output++)
-			free(weights[layer][output]), free(velocity[layer][output]);
-
-		free(weights[layer]);
-		free(velocity[layer]);
-	}
-	free(weights);
-	free(velocity);
-
-	if (num_training_data)
-	{
-		for (unsigned i = 0; i < num_training_data; i++)
-			free(training_inputs[i]);
-
-		free(training_inputs);
-		free(training_answers);
-	}
-
-	for (unsigned layer = 1; layer < num_layers; layer++)
-		free(layers[layer]), free(error_signal[layer]);
-
-	free(error_signal);
-	free(layers);
-	free(layer_sizes);
+	delete (MATRIX_DATA*)matrixData;
 }
 
 /*
@@ -369,27 +341,28 @@ User end functions
 
 void NeuralNetwork::randomizeWeights()
 {
-	// Set those randomized weights
-	for (unsigned layer = 0; layer < num_layers - 1; layer++)
-		for (unsigned output = 0; output < layer_sizes[layer + 1]; ++output)
-		{
-			// Establish a good range for the randomized weights
-			float range;
-			if (layer == num_layers - 2)
-				// Xavier/Glorot for last layer (sorfmax)
-				range = sqrtf(6.f / float(layer_sizes[layer] + layer_sizes[num_layers - 1]));
-			else
-				// He uniform ReLU for hidden layers
-				range = sqrtf(6.0f / float(layer_sizes[layer]));
+	MATRIX_DATA& M = *((MATRIX_DATA*)matrixData);
 
-			// Iterate through weights and randomize [-range,range)
-			for (unsigned input = 0; input < layer_sizes[layer] + 1u; ++input)
-			{
-				// simple float from 64-bit: map [0,2^64) -> [0,1)
-				float u = random_0_1(); // 2^56
-				weights[layer][output][input] = (2.0f * u - 1.0f) * range;
-			}
-		}
+	// Set those randomized weights
+	for (unsigned layer = 0; layer < M.num_layers - 1; layer++)
+	{
+		// Establish a good range for the randomized weights
+		float range;
+		if (layer == M.num_layers - 2)
+			// Xavier/Glorot for last layer (softmax)
+			range = sqrtf(6.f / float(M.layer_sizes[layer] + M.layer_sizes[M.num_layers - 1]));
+		else
+			// He uniform ReLU for hidden layers
+			range = sqrtf(6.0f / float(M.layer_sizes[layer]));
+
+		// Iterate throught the matrix parameters and randomize them
+		for (unsigned output_node = 0; output_node < M.layer_sizes[layer + 1]; output_node++)
+			for(unsigned input_node = 0; input_node < M.layer_sizes[layer]; input_node++)
+				M.Weights[layer](output_node,input_node) = (2.f * random_0_1() - 1.f) * range;
+
+		// Zero the biases
+		memset(M.biases[layer].data(), 0, sizeof(float) * M.layer_sizes[layer + 1]);
+	}
 }
 
 // Stores the weights in a binary file for future loading. They are stored
@@ -399,6 +372,8 @@ void NeuralNetwork::randomizeWeights()
 
 bool NeuralNetwork::storeWeights(const char* stored_name, const char* filename) const
 {
+	MATRIX_DATA& M = *((MATRIX_DATA*)matrixData);
+
 	// Okay this function works but is a bit of a mess, just trust it
 	if (!stored_name || !*stored_name)
 		return false;
@@ -421,6 +396,10 @@ bool NeuralNetwork::storeWeights(const char* stored_name, const char* filename) 
 	{
 		fclose(weights_file);
 
+		// File corrupted or from previous version
+		if (desc.n_layers == 1)
+			return false;
+
 	for_new_file:
 
 		weights_file = fopen(filename, "ab");
@@ -428,7 +407,7 @@ bool NeuralNetwork::storeWeights(const char* stored_name, const char* filename) 
 			return false;
 	
 		// create the binary descriptor
-		desc = { binary_descriptor::default_magic, num_layers };
+		desc = { binary_descriptor::default_magic, M.num_layers };
 		unsigned i = 0;
 		for (; i < 40 && stored_name[i]; i++)
 			desc.name[i] = stored_name[i];
@@ -437,19 +416,21 @@ bool NeuralNetwork::storeWeights(const char* stored_name, const char* filename) 
 			goto cleanup;
 
 		// push the binary descriptor and layer sizes into the file
-		fwrite(&desc, sizeof(binary_descriptor), 1, weights_file);
-		fwrite(layer_sizes, sizeof(uint32_t), num_layers, weights_file);
+		if (
+			fwrite(&desc, sizeof(binary_descriptor), 1, weights_file) != 1 ||
+			fwrite(M.layer_sizes, sizeof(uint32_t), M.num_layers, weights_file) != M.num_layers
+			) goto cleanup;
 
 		goto push_weights;	
 	}
 
 	// Check you have the same amout of layers
-	if (desc.n_layers != num_layers)
+	if (desc.n_layers != M.num_layers)
 		goto cleanup;
 
 	// Check the layer sizes are the same
 	for (uint32_t layer_size, i = 0; i < desc.n_layers; i++)
-		if (fread(&layer_size, sizeof(uint32_t), 1, weights_file) != 1 || layer_size != layer_sizes[i])
+		if (fread(&layer_size, sizeof(uint32_t), 1, weights_file) != 1 || layer_size != M.layer_sizes[i])
 			goto cleanup;
 
 	fseek(weights_file, 0, SEEK_CUR); // otherwise the debugger complains
@@ -457,9 +438,13 @@ bool NeuralNetwork::storeWeights(const char* stored_name, const char* filename) 
 push_weights:
 
 	// Everything alright, override the previous weight values
-	for (unsigned layer = 0; layer < num_layers - 1; layer++)
-		for (unsigned output_node = 0; output_node < layer_sizes[layer + 1]; output_node++)
-			fwrite(weights[layer][output_node], sizeof(float), layer_sizes[layer] + 1, weights_file);
+	for (unsigned layer = 0; layer < M.num_layers - 1; layer++)
+	{
+		for (unsigned output_node = 0; output_node < M.layer_sizes[layer + 1]; output_node++)
+			fwrite(M.Weights[layer].data() + output_node * M.Weights[layer].ld(), sizeof(float), M.layer_sizes[layer], weights_file);
+
+		fwrite(M.biases[layer].data(), sizeof(float), M.layer_sizes[layer + 1], weights_file);
+	}
 	success = true;
 cleanup:
 
@@ -473,6 +458,8 @@ cleanup:
 
 bool NeuralNetwork::loadWeights(const char* stored_name, const char* filename)
 {
+	MATRIX_DATA& M = *((MATRIX_DATA*)matrixData);
+
 	if (!stored_name || !*stored_name)
 		return false;
 
@@ -487,7 +474,7 @@ bool NeuralNetwork::loadWeights(const char* stored_name, const char* filename)
 	binary_descriptor desc = find_in_file(stored_name, weights_file);
 
 	// If not found or mismatch in amount of layers fail
-	if (!desc.magic || desc.n_layers != num_layers)
+	if (!desc.magic || desc.n_layers != M.num_layers)
 	{
 		fclose(weights_file);
 		return false;
@@ -495,16 +482,31 @@ bool NeuralNetwork::loadWeights(const char* stored_name, const char* filename)
 
 	// Check the layer sizes are the same, else fail
 	for (uint32_t layer_size, i = 0; i < desc.n_layers; i++)
-		if (fread(&layer_size, sizeof(uint32_t), 1, weights_file) != 1 || layer_size != layer_sizes[i])
+		if (fread(&layer_size, sizeof(uint32_t), 1, weights_file) != 1 || layer_size != M.layer_sizes[i])
 		{
 			fclose(weights_file);
 			return false;
 		}
 
 	// Copies the weights from the array into the object stored weights
-	for (unsigned layer = 0; layer < num_layers - 1; layer++)
-		for (unsigned output_node = 0; output_node < layer_sizes[layer + 1]; output_node++)
-			fread(weights[layer][output_node], sizeof(float), layer_sizes[layer] + 1, weights_file);
+	for (unsigned layer = 0; layer < M.num_layers - 1; layer++)
+	{
+		size_t num_weights = M.layer_sizes[layer];
+		size_t num_biases = M.layer_sizes[layer + 1];
+
+		for (unsigned output_node = 0; output_node < M.layer_sizes[layer + 1]; output_node++)
+			if(fread(M.Weights[layer].data() + output_node * M.Weights[layer].ld(), sizeof(float), num_weights, weights_file) != num_weights)
+			{
+				fclose(weights_file);
+				return false;
+			}
+
+		if(fread(M.biases[layer].data(), sizeof(float), num_biases, weights_file) != num_biases)
+		{
+			fclose(weights_file);
+			return false;
+		}
+	}
 
 	fclose(weights_file);
 	return true;
@@ -515,6 +517,8 @@ bool NeuralNetwork::loadWeights(const char* stored_name, const char* filename)
 
 void NeuralNetwork::feedData(unsigned num_data, float* const* new_training_inputs, unsigned const* correct_answers)
 {
+	MATRIX_DATA& M = *((MATRIX_DATA*)matrixData);
+
 	float** temp_inputs = (float**)calloc(num_data + num_training_data, sizeof(float*));
 	unsigned* temp_answers = (unsigned*)calloc(num_data + num_training_data, sizeof(unsigned));
 
@@ -526,8 +530,8 @@ void NeuralNetwork::feedData(unsigned num_data, float* const* new_training_input
 
 	for (unsigned i = num_training_data; i < num_training_data + num_data; i++)
 	{
-		temp_inputs[i] = (float*)calloc(layer_sizes[0], sizeof(float));
-		for (unsigned j = 0; j < layer_sizes[0]; j++)
+		temp_inputs[i] = (float*)calloc(M.layer_sizes[0], sizeof(float));
+		for (unsigned j = 0; j < M.layer_sizes[0]; j++)
 			temp_inputs[i][j] = new_training_inputs[i - num_training_data][j];
 
 		temp_answers[i] = correct_answers[i - num_training_data];
@@ -544,40 +548,56 @@ void NeuralNetwork::feedData(unsigned num_data, float* const* new_training_input
 	this->training_answers = temp_answers;
 }
 
+// Releases all the training examples stored in the neural network data,
+// for better memory management. New data can be feeded normally.
+
+void NeuralNetwork::freeData()
+{
+	if (num_training_data)
+	{
+		for (unsigned i = 0; i < num_training_data; i++)
+			free(training_inputs[i]);
+
+		free(training_inputs);
+		free(training_answers);
+
+		training_inputs = nullptr;
+		training_answers = nullptr;
+		num_training_data = 0;
+	}
+}
+
 // Using the current weights for the model outputs a prediction given an input.
 // If an output pointer is set, it will write it there, otherwise it creates a new one.
 
 float* NeuralNetwork::predictCase(float const* input)
 {
-	// This here is the only line that binds the input layer to any actual input
-	layers[0] = (float*)input;
+	MATRIX_DATA& M = *((MATRIX_DATA*)matrixData);
 
-	// Iterates through the layers computing the dot product and applying ReLU to inner layers
-	for (unsigned next = 1; next < num_layers; next++)
-	{
-		float* _layer = layers[next];
-		unsigned _layer_size = layer_sizes[next];
+	// The input case is bound to the input laywe. Has to be 
+	// recasted but the data inside will not be modified.
+	M.layers[0].set_data((float*)input, M.layer_sizes[0]);
 
-		for (unsigned output_node = 0; output_node < _layer_size; output_node++)
-			_layer[output_node] = _dot_prod(next - 1, output_node);
+	// Does the forward pass
+	doForwardPass();
 
-		if (_layer != output_layer)
-			_ReLU(next);
-	}
-	// applies softmax and retunrs output layer
-	return _softmax();
+	// Returns the last layer vector data
+	return M.output_layer.data();
 }
 
 // Using the current weights for the model computes the prediction error on a single data point.
 
 float NeuralNetwork::outputError(float const* input, const unsigned correct_answer)
 {
+	MATRIX_DATA& M = *((MATRIX_DATA*)matrixData);
+
 	// What do you think?
-	predictCase(input);
-	float p = output_layer[correct_answer];
+	float p = predictCase(input)[correct_answer];
+
 	// We dont want infinities here
 	if (p < 1e-12f) 
 		p = 1e-12f;
+
 	// Return loss function
 	return -logf(p);
 }
@@ -600,7 +620,10 @@ float NeuralNetwork::computePredictionError(unsigned num_data, float* const* tes
 
 float NeuralNetwork::computePredictionRate(unsigned num_data, float* const* test_inputs, unsigned const* correct_answers)
 {
-	unsigned answer, success_count = 0u, output_size = layer_sizes[num_layers - 1];
+	MATRIX_DATA& M = *((MATRIX_DATA*)matrixData);
+
+	unsigned answer, success_count = 0u, output_size = M.layer_sizes[M.num_layers - 1];
+	float* prediction = M.output_layer.data();
 
 	for (unsigned n = 0; n < num_data; n++)
 	{
@@ -608,7 +631,7 @@ float NeuralNetwork::computePredictionRate(unsigned num_data, float* const* test
 		answer = correct_answers[n];
 
 		unsigned c;
-		for (c = 0; c < output_size && (c == answer || output_layer[c] < output_layer[answer]); c++);
+		for (c = 0; c < output_size && (c == answer || prediction[c] < prediction[answer]); c++);
 
 		if (c == output_size)success_count++;
 	}
@@ -699,9 +722,9 @@ float NeuralNetwork::trainCrossValidation(unsigned epoch, unsigned patience, uns
 // Trains the weights using cross validation (10% testing batches) for different values
 // of lambda and learning rate, then trains the full set and outputs the expected error.
 
-float NeuralNetwork::train_HyperParamCalibration()
+float NeuralNetwork::train_HyperParamCalibration(unsigned tries, unsigned epoch)
 {
-	if (!num_training_data)
+	if (!num_training_data || !tries || !epoch)
 		return INFINITY;
 
 	constexpr float min_learning_rate = 1e-5f;
@@ -718,8 +741,6 @@ float NeuralNetwork::train_HyperParamCalibration()
 
 	constexpr unsigned n_batches = 10;
 
-	constexpr unsigned tries = 50;
-	constexpr unsigned epoch = 20;
 	constexpr unsigned patience = 3;
 
 	float best_learning_rate;
@@ -781,38 +802,40 @@ float NeuralNetwork::train_HyperParamCalibration()
 
 void NeuralNetwork::printWeights()
 {
-	for (unsigned layer = 0; layer < num_layers - 1; layer++)
+	MATRIX_DATA& M = *((MATRIX_DATA*)matrixData);
+
+	for (unsigned layer = 0; layer < M.num_layers - 1; layer++)
 	{
 		if (!layer)
-			printf("\nInput layer (%u nodes) -> ", layer_sizes[layer]);
+			printf("\nInput layer (%u nodes) -> ", M.layer_sizes[layer]);
 		else
-			printf("\nLayer %u (%u nodes) -> ", layer, layer_sizes[layer]);
+			printf("\nLayer %u (%u nodes) -> ", layer, M.layer_sizes[layer]);
 
-		if (layer == num_layers - 2)
-			printf("Output layer (%u nodes):\n", layer_sizes[layer + 1]);
+		if (layer == M.num_layers - 2)
+			printf("Output layer (%u nodes):\n", M.layer_sizes[layer + 1]);
 		else
-			printf("Layer %u (%u nodes):\n", layer + 1, layer_sizes[layer + 1]);
+			printf("Layer %u (%u nodes):\n", layer + 1, M.layer_sizes[layer + 1]);
 
-		for (unsigned output_node = 0; output_node < layer_sizes[layer + 1]; output_node++)
+		for (unsigned output_node = 0; output_node < M.layer_sizes[layer + 1]; output_node++)
 		{
-			if (layer_sizes[layer + 1] > 8 && output_node > 2 && output_node < layer_sizes[layer + 1] - 3) 
+			if (M.layer_sizes[layer + 1] > 8 && output_node > 2 && output_node < M.layer_sizes[layer + 1] - 3)
 				continue;
 
 			printf("\tOutput %u: { ", output_node);
-			for (unsigned i = 0; i < layer_sizes[layer]; i++)
+			for (unsigned i = 0; i < M.layer_sizes[layer]; i++)
 			{
-				if (layer_sizes[layer] > 10 && i > 3 && i < layer_sizes[layer] - 3)
+				if (M.layer_sizes[layer] > 10 && i > 3 && i < M.layer_sizes[layer] - 3)
 					continue;
 
-				printf("%+1.3f, ", weights[layer][output_node][i]);
+				printf("%+1.3f, ", M.Weights[layer](output_node, i));
 
-				if (layer_sizes[layer] > 10 && i == 3)
+				if (M.layer_sizes[layer] > 10 && i == 3)
 					printf("... , ");
 			}
 
-			printf("bias = %+1.3f }\n", weights[layer][output_node][layer_sizes[layer]]);
+			printf("bias = %+1.3f }\n", M.biases[layer](output_node));
 
-			if (layer_sizes[layer + 1] > 8 && output_node == 2) 
+			if (M.layer_sizes[layer + 1] > 8 && output_node == 2) 
 				printf("\t ...\n");
 		}
 	}
@@ -827,9 +850,18 @@ Getters and setters
 
 // Returns a pointer to the set of weights
 
-float*** NeuralNetwork::getWeights() const
+float* NeuralNetwork::getWeights(unsigned layer)
 {
-	return weights;
+	MATRIX_DATA& M = *((MATRIX_DATA*)matrixData);
+	return M.Weights[layer].data();
+}
+
+// Returns a pointer to the biases of a specific layer
+
+float* NeuralNetwork::getBiases(unsigned layer)
+{
+	MATRIX_DATA& M = *((MATRIX_DATA*)matrixData);
+	return M.biases[layer].data();
 }
 
 // Returns the lambda used for weight decay
@@ -872,4 +904,18 @@ float NeuralNetwork::getMomentum() const
 void NeuralNetwork::setMomentum(float momentum)
 {
 	gradient_momentum = momentum;
+}
+
+// Returns the alpha variable used for learning rate decay
+
+float NeuralNetwork::getLRalpha() const
+{
+	return learning_rate_alpha;
+}
+
+// Sets the alpha variable used for learning rate decay
+
+void NeuralNetwork::setLRalpha(float alpha)
+{
+	learning_rate_alpha = alpha;
 }
