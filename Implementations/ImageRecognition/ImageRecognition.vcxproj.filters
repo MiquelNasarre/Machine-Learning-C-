@@ -25,5 +25,8 @@
     <ClInclude Include="include\ImageRecognition.h">
       <Filter>Sources\Public</Filter>
     </ClInclude>
+    <ClInclude Include="Wishes for the future.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
