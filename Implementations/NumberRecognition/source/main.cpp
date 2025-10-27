@@ -9,6 +9,7 @@
 //#define _TRAINING
 #define SHOWCASE "96.25%", "CV_3B1B"
 
+// Old function that uses the old weights format, not needed anymore but looks pretty.
 static void storeWeightsImages(float*** weights, unsigned n_neurons)
 {
 	Image image(280, 280);
@@ -82,7 +83,7 @@ int main()
 	NN.printWeights();
 
 	printf("\nInitial Prediction Error: %.4f", NN.computePredictionError(testing_set_size, testing_data, testing_labels));
-	printf("\nInitial Prediction Rate:  %.2f%c\n", NN.computePredictionRate(testing_set_size, testing_data, testing_labels) * 100.f, 37);
+	printf("\nInitial Prediction Rate:  %.2f%%\n", NN.computePredictionRate(testing_set_size, testing_data, testing_labels) * 100.f);
 
 	NN.feedData(training_set_size, training_data, training_labels);
 
@@ -96,9 +97,9 @@ int main()
 	NN.printWeights();
 
 	printf("\nUpdated Prediction Error: %.4f", NN.computePredictionError(testing_set_size, testing_data, testing_labels));
-	printf("\nUpdated Prediction Rate:  %.2f%c\n\n", NN.computePredictionRate(testing_set_size, testing_data, testing_labels) * 100.f, 37);
+	printf("\nUpdated Prediction Rate:  %.2f%%\n\n", NN.computePredictionRate(testing_set_size, testing_data, testing_labels) * 100.f);
 
-	NN.storeWeights(NN_name);
+	//NN.storeWeights(NN_name);
 
 #else
 
