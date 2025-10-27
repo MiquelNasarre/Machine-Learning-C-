@@ -53,10 +53,11 @@ int main()
 	const unsigned layers[] = { IMAGE_DIM, 16, 16, 10 };
 	const char* NN_name = "Training set";
 	
-	//const unsigned epoch = 5;
-	//const float learning_rate = 0.000001f;
-	//const float weight_decay = 1e-8f;
-	//const float momentum = 0.9f;
+	const unsigned epoch = 10;
+	const float learning_rate = 0.0004f;
+	const float weight_decay = 0.f;
+	const float momentum = 0.85f;
+	const float lr_alpha = 0.01f;
 
 	//float* const* training_values = NumberRecognition::getValues(TRAINING, training_set_start, training_set_size + training_set_start);
 	float* const* training_images = NumberRecognition::getImages(TRAINING, training_set_start, training_set_size + training_set_start);
@@ -70,30 +71,32 @@ int main()
 	float* const* testing_data = testing_images;
 
 	NeuralNetwork NN(num_layers, layers);
-	//NN.setLearningRate(learning_rate);
-	//NN.setWeightDecay(weight_decay);
-	//NN.setMomentum(momentum);
+	NN.setLearningRate(learning_rate);
+	NN.setWeightDecay(weight_decay);
+	NN.setMomentum(momentum);
+	NN.setLRalpha(lr_alpha);
+
 	//NN.loadWeights(NN_name);
 
 	printf("Neural Network correctly generated, Initial weights:\n");
 	NN.printWeights();
 
-	printf("\nInitial prediction Error: %.4f", NN.computePredictionError(testing_set_size, testing_data, testing_labels));
-	printf("\nInitial Prediction Rate:  %.4f\n", NN.computePredictionRate(testing_set_size, testing_data, testing_labels));
+	printf("\nInitial Prediction Error: %.4f", NN.computePredictionError(testing_set_size, testing_data, testing_labels));
+	printf("\nInitial Prediction Rate:  %.2f%c\n", NN.computePredictionRate(testing_set_size, testing_data, testing_labels) * 100.f, 37);
 
 	NN.feedData(training_set_size, training_data, training_labels);
 
-	printf("\nStarted cross validation training ...\n");
+	printf("\nStarted training weights ...\n");
 
-	timer.mark();
-	NN.train_HyperParamCalibration();
+	NN.trainWeights(epoch);
+	//NN.train_HyperParamCalibration(50, 20);
 	float time = timer.check();
 
-	printf("\nFinished cross validation in %.4fs, updated weights:\n", time);
+	printf("\nFinished training in %.4fs, updated weights:\n", time);
 	NN.printWeights();
 
 	printf("\nUpdated Prediction Error: %.4f", NN.computePredictionError(testing_set_size, testing_data, testing_labels));
-	printf("\nUpdated Prediction Rate:  %.4f\n\n", NN.computePredictionRate(testing_set_size, testing_data, testing_labels));
+	printf("\nUpdated Prediction Rate:  %.2f%c\n\n", NN.computePredictionRate(testing_set_size, testing_data, testing_labels) * 100.f, 37);
 
 	NN.storeWeights(NN_name);
 
@@ -103,7 +106,7 @@ int main()
 
 	printf("Neural Network '%s' from file '%s' has been successfully loaded. Weights:\n", SHOWCASE);
 	NN.printWeights();
-	storeWeightsImages(NN.getWeights(), 16);
+	//storeWeightsImages(NN.getWeights(), 16);
 
 	const unsigned testing_set_size = NumberRecognition::getSize(TESTING);
 	float* const* testing_data = NumberRecognition::getImages(TESTING, 0, testing_set_size);

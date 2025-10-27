@@ -19,6 +19,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="source\LinearAlgebra.cpp" />
     <ClCompile Include="source\NeuralNetwork.cpp" />
   </ItemGroup>
   <ItemGroup>

@@ -17,6 +17,9 @@
     <ClCompile Include="source\NeuralNetwork.cpp">
       <Filter>Sources\Private</Filter>
     </ClCompile>
+    <ClCompile Include="source\LinearAlgebra.cpp">
+      <Filter>Sources\Private</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\NeuralNetwork.h">

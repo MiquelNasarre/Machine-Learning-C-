@@ -41,7 +41,7 @@ public:
     // Generates a vector from the data provided, copying
     // or borrowing the pointer as indicated.
     Vector(float* data, size_t n, bool own = false);
-    void set_data(float* new_data, size_t size);  // Non-owning
+    void set_data(float* new_data, size_t size, bool own = false);
 
     // Deep copies.
     Vector(const Vector& other);
@@ -58,15 +58,15 @@ public:
 
     // Getters
 
-    inline float* data();               // Returns the data pointer
-    inline const float* data() const;   // Returns the data pointer as const
-    inline size_t size() const;         // Returns the vector size
+    float* data();               // Returns the data pointer
+    const float* data() const;   // Returns the data pointer as const
+    size_t size() const;         // Returns the vector size
     float norm2() const;                // Computes the squared norm of the vector
 
     // Returns the reference to the vector index i.
-    inline float& operator()(size_t i);
+    float& operator()(size_t i);
     // Returns the const reference to the vector index i.
-    inline const float& operator()(size_t i) const;
+    const float& operator()(size_t i) const;
 
     // Fill helpers
 
@@ -90,7 +90,9 @@ public:
     friend void axpb(const Matrix&, const Vector&, const Vector&, Vector&);
     friend void axpy(const Matrix&, Matrix&, float);
     friend void axpby(const Matrix&, Matrix&, float, float);
+    friend void axpby(const Vector&, Vector&, float, float);
     friend void add(const Matrix&, const Matrix&, Matrix&);
+    friend void add(const Vector&, const Vector&, Vector&);
 #pragma endregion
 };
 
@@ -119,6 +121,7 @@ public:
     // Generates a matrix from the data provided, copying
     // or borrowing the pointer as indicated.
     Matrix(float* data, size_t rows, size_t cols, size_t ld, bool own = false);
+    void set_data(float* new_data, size_t rows, size_t cols, size_t ld, bool own = false);
 
     // Deep copies.
     Matrix(const Matrix&);
@@ -134,16 +137,16 @@ public:
 
     // Getters
 
-    inline float* data();               // Returns the data pointer
-    inline const float* data() const;   // Returns the data pointer as const
-    inline size_t rows() const;         // Returns the number of rows
-    inline size_t cols() const;         // Returns the number of columns
-    inline size_t ld() const;           // Returns the leading dimension
+    float* data();               // Returns the data pointer
+    const float* data() const;   // Returns the data pointer as const
+    size_t rows() const;         // Returns the number of rows
+    size_t cols() const;         // Returns the number of columns
+    size_t ld() const;           // Returns the leading dimension
 
     // Returns the reference to the matrix position i,j.
-    inline float& operator()(size_t i, size_t j);
+    float& operator()(size_t i, size_t j);
     // Returns the const reference to the matrix position i,j.
-    inline const float& operator()(size_t i, size_t j) const;
+    const float& operator()(size_t i, size_t j) const;
 
     // Fill helpers
 
@@ -161,6 +164,7 @@ public:
     friend void axpy(const Matrix&, Matrix&, float);
     friend void axpby(const Matrix&, Matrix&, float, float);
     friend void add(const Matrix&, const Matrix&, Matrix&);
+    friend void add(const Vector&, const Vector&, Vector&);
 #pragma endregion
 };
 
